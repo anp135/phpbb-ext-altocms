@@ -692,4 +692,99 @@ class user extends \phpbb\user {
 
         return true;
     }
+    function session_kill($new_session = true)
+    {
+        global $SID, $_SID, $db, $config, $phpbb_root_path, $phpEx, $phpbb_container, $phpbb_dispatcher;
+
+        $sql = 'DELETE FROM ' . SESSIONS_TABLE . "
+			WHERE session_id = '" . $db->sql_escape($this->session_id) . "'
+				AND session_user_id = " . (int) $this->data['user_id'];
+        $db->sql_query($sql);
+
+        $user_id = (int) $this->data['user_id'];
+        $session_id = $this->session_id;
+        /**
+         * Event to send session kill information to extension
+         * Read-only event
+         *
+         * @event core.session_kill_after
+         * @var	int		user_id				user_id of the session user.
+         * @var	string		session_id				current user's session_id
+         * @var	bool	new_session 	should we create new session for user
+         * @since 3.1.6-RC1
+         */
+        $vars = array('user_id', 'session_id', 'new_session');
+        extract($phpbb_dispatcher->trigger_event('core.session_kill_after', compact($vars)));
+        unset($user_id);
+        unset($session_id);
+
+        // Allow connecting logout with external auth method logout
+        $provider_collection = $phpbb_container->get('auth.provider_collection');
+        $provider = $provider_collection->get_provider();
+        $provider->logout($this->data, $new_session);
+
+        if ($this->data['user_id'] != ANONYMOUS)
+        {
+            // Delete existing session, update last visit info first!
+            if (!isset($this->data['session_time']))
+            {
+                $this->data['session_time'] = time();
+            }
+
+            $sql = 'UPDATE ' . USERS_TABLE . '
+				SET user_lastvisit = ' . (int) $this->data['session_time'] . '
+				WHERE user_id = ' . (int) $this->data['user_id'];
+            $db->sql_query($sql);
+
+            if ($this->cookie_data['k'])
+            {
+                $sql = 'DELETE FROM ' . SESSIONS_KEYS_TABLE . '
+					WHERE user_id = ' . (int) $this->data['user_id'] . "
+						AND key_id = '" . $db->sql_escape(md5($this->cookie_data['k'])) . "'";
+                $db->sql_query($sql);
+            }
+
+            // Reset the data array
+            $this->data = array();
+
+            $sql = 'SELECT *
+				FROM ' . USERS_TABLE . '
+				WHERE user_id = ' . ANONYMOUS;
+            $result = $db->sql_query($sql);
+            $this->data = $db->sql_fetchrow($result);
+            $db->sql_freeresult($result);
+        }
+
+        $cookie_expire = $this->time_now - 31536000;
+        $this->set_cookie('u', '', $cookie_expire);
+        $this->set_cookie('k', '', $cookie_expire);
+        //135
+        //$this->set_cookie('sid', '', $cookie_expire);
+        unset($cookie_expire);
+
+        //135
+        //$SID = '?sid=';
+        //$this->session_id = $_SID = '';
+
+        //135
+        session_unset();
+        session_destroy();
+        unset($this->session_id);
+        session_write_close();
+        //setcookie($session_name,'',0,$session_path,$session_host);
+        session_start();
+        session_regenerate_id(true);
+        $this->session_id = session_id();
+
+        $SID = '?sid=' . $this->session_id;
+        $this->session_id = $_SID = $this->session_id;
+
+        // To make sure a valid session is created we create one for the anonymous user
+        if ($new_session)
+        {
+            $this->session_create(ANONYMOUS);
+        }
+
+        return true;
+    }
 }

@@ -6,6 +6,8 @@ services:
         class: anp135\altocms\user
         arguments:
             - %datetime.class%
+    auth:
+        class: anp135\altocms\auth
 
     anp135.altocms.listener:
         class: anp135\altocms\event\listener
