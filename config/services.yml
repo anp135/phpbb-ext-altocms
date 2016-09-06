@@ -1,0 +1,19 @@
+imports:
+    - { resource: parameters.yml }
+
+services:
+    user:
+        class: anp135\altocms\user
+        arguments:
+            - %datetime.class%
+
+    anp135.altocms.listener:
+        class: anp135\altocms\event\listener
+        arguments:
+            - '@controller.helper'
+            - '@template'
+            - '@user'
+            - '@config'
+
+        tags:
+            - { name: event.listener }
