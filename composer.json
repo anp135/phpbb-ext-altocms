@@ -3,7 +3,7 @@
     "type": "phpbb-extension",
     "description": "Integration with AltoCMS",
     "homepage": "http://bitbucket.org/anp135/",
-    "version": "0.1.0-dev",
+    "version": "1.0",
     "time": "2016-09-05",
     "license": "GPL-2.0",
     "authors": [
