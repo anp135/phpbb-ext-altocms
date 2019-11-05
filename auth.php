@@ -14,6 +14,7 @@ class auth extends \phpbb\auth\auth {
         global $db, $user, $phpbb_root_path, $phpEx, $phpbb_container;
         global $phpbb_dispatcher;
 
+        /* @var $provider_collection \phpbb\auth\provider_collection */
         $provider_collection = $phpbb_container->get('auth.provider_collection');
 
         $provider = $provider_collection->get_provider();
@@ -116,12 +117,13 @@ class auth extends \phpbb\auth\auth {
                     {
                         // the login array is used because the user ids do not differ for re-authentication
                         //135 Must update session not delete because right php session mechanism used.
-                        //$sql = 'DELETE FROM ' . SESSIONS_TABLE . "
-						//	WHERE session_id = '" . $db->sql_escape($old_session_id) . "'
-						//	AND session_user_id = {$login['user_row']['user_id']}";
-                        $sql = 'UPDATE ' . SESSIONS_TABLE . " SET session_admin = " . $admin ."
-						WHERE session_id = '" . $db->sql_escape($user->session_id) . "'
-						AND session_user_id = {$login['user_row']['user_id']}";
+                        /*$sql = 'DELETE FROM ' . SESSIONS_TABLE . "
+							WHERE session_id = '" . $db->sql_escape($old_session_id) . "'
+							AND session_user_id = {$login['user_row']['user_id']}";*/
+                        $sql = 'UPDATE ' . SESSIONS_TABLE . " 
+                            SET session_admin = " . $admin ." 
+                            WHERE session_id = '" . $db->sql_escape($user->session_id) . "' 
+                                AND session_user_id = {$login['user_row']['user_id']}";
                         $db->sql_query($sql);
                     }
 

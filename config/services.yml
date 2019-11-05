@@ -5,7 +5,9 @@ services:
     user:
         class: anp135\altocms\user
         arguments:
-            - %datetime.class%
+            - '@language'
+            - '%datetime.class%'
+
     auth:
         class: anp135\altocms\auth
 

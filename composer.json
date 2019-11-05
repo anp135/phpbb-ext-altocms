@@ -3,7 +3,7 @@
     "type": "phpbb-extension",
     "description": "Integration with AltoCMS",
     "homepage": "http://github.com/anp135/phpbb-ext-altocms",
-    "version": "1.0",
+    "version": "3.2.0.1",
     "time": "2016-09-05",
     "license": "GPL-2.0",
     "authors": [
@@ -15,12 +15,12 @@
         }
     ],
     "require": {
-        "php": ">=5.3.3"
+        "php": ">=7.2"
     },
     "extra": {
         "display-name": "AltoCMS",
         "soft-require": {
-            "phpbb/phpbb": ">=3.1.4,<3.2.0@dev"
+            "phpbb/phpbb": ">=3.2"
         }
     }
 }

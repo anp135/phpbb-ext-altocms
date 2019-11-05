@@ -12,7 +12,7 @@ class user extends \phpbb\user {
     function session_begin($update_session_page = true)
     {
         global $phpEx, $SID, $_SID, $_EXTRA_URL, $db, $config, $phpbb_root_path;
-        global $request, $phpbb_container;
+        global $request, $phpbb_container, $user, $phpbb_log, $phpbb_dispatcher;
 
         // Give us some basic information
         $this->time_now				= time();
@@ -27,7 +27,8 @@ class user extends \phpbb\user {
 
         //135 implement PHP standart session management
         $request->enable_super_globals();
-        session_name($config['cookie_name'] . '_sid');
+        //session_name($config['cookie_name'] . '_sid');
+        session_name('PHPSESSID');
         session_set_cookie_params(null, $config['cookie_path'], $config['cookie_domain']);
         session_id() ? true : session_start();
         $this->session_id = $_SID = session_id();
@@ -55,12 +56,11 @@ class user extends \phpbb\user {
             $this->forwarded_for = '';
         }
 
-        if ($request->is_set($config['cookie_name'] . '_sid', \phpbb\request\request_interface::COOKIE) || $request->is_set($config['cookie_name'] . '_u', \phpbb\request\request_interface::COOKIE))
+        if ($request->is_set('PHPSESSID', \phpbb\request\request_interface::COOKIE) || $request->is_set($config['cookie_name'] . '_u', \phpbb\request\request_interface::COOKIE))
         {
-            $this->cookie_data['u'] = request_var($config['cookie_name'] . '_u', 0, false, true);
-            $this->cookie_data['k'] = request_var($config['cookie_name'] . '_k', '', false, true);
-            //135
-            //$this->session_id 		= request_var($config['cookie_name'] . '_sid', '', false, true);
+            $this->cookie_data['u'] = $request->variable($config['cookie_name'] . '_u', 0, false, \phpbb\request\request_interface::COOKIE);
+            $this->cookie_data['k'] = $request->variable($config['cookie_name'] . '_k', '', false, \phpbb\request\request_interface::COOKIE);
+            //$this->session_id 		= $request->variable('PHPSESSID', '', false, \phpbb\request\request_interface::COOKIE);
 
             $SID = (defined('NEED_SID')) ? '?sid=' . $this->session_id : '?sid=';
             $_SID = (defined('NEED_SID')) ? $this->session_id : '';
@@ -68,27 +68,17 @@ class user extends \phpbb\user {
             //135
             /*if (empty($this->session_id))
             {
-                $this->session_id = $_SID = request_var('sid', '');
+                $this->session_id = $_SID = $request->variable('sid', '');
                 $SID = '?sid=' . $this->session_id;
                 $this->cookie_data = array('u' => 0, 'k' => '');
             }*/
 
             //135 save to SESSION
-            $_SESSION['forum_user_id'] = (int) $this->cookie_data['u'];
-
-            //135 add session www.user_id
-            /*$sql = 'SELECT wu.user_id	FROM ' . ALTO_USERS_TABLE . ' wu, ' . USERS_TABLE . " fu
-        	WHERE fu.user_id = '" . intval($this->cookie_data['u']) . "'
-		    	AND fu.username = wu.user_login";
-            $result = $db->sql_query($sql);
-            $this->data = $db->sql_fetchrow($result);
-            $db->sql_freeresult($result);
-            (!$_SESSION['user_id'] || $_SESSION['user_id'] != $this->data['user_id']) ? $_SESSION['user_id'] = (int) $this->data['user_id'] : false;*/
-
+            $_SESSION['phpbb_user_id'] = (int) $this->cookie_data['u'];
         }
         else
         {
-            $_SESSION['forum_user_id'] = 0;
+            $_SESSION['phpbb_user_id'] = 0;
             $this->session_id = $_SID = session_id();
             $SID = '?sid=' . $this->session_id;
         }
@@ -97,11 +87,21 @@ class user extends \phpbb\user {
 
         // Why no forwarded_for et al? Well, too easily spoofed. With the results of my recent requests
         // it's pretty clear that in the majority of cases you'll at least be left with a proxy/cache ip.
-        $this->ip = htmlspecialchars_decode($request->server('REMOTE_ADDR'));
-        $this->ip = preg_replace('# {2,}#', ' ', str_replace(',', ' ', $this->ip));
+        $ip = htmlspecialchars_decode($request->server('REMOTE_ADDR'));
+        $ip = preg_replace('# {2,}#', ' ', str_replace(',', ' ', $ip));
+
+        /**
+         * Event to alter user IP address
+         *
+         * @event core.session_ip_after
+         * @var	string	ip	REMOTE_ADDR
+         * @since 3.1.10-RC1
+         */
+        $vars = array('ip');
+        extract($phpbb_dispatcher->trigger_event('core.session_ip_after', compact($vars)));
 
         // split the list of IPs
-        $ips = explode(' ', trim($this->ip));
+        $ips = explode(' ', trim($ip));
 
         // Default IP if REMOTE_ADDR is invalid
         $this->ip = '127.0.0.1';
@@ -165,8 +165,8 @@ class user extends \phpbb\user {
             }
             else
             {
-                set_config('limit_load', '0');
-                set_config('limit_search_load', '0');
+                $config->set('limit_load', '0');
+                $config->set('limit_search_load', '0');
             }
         }
 
@@ -224,12 +224,12 @@ class user extends \phpbb\user {
                     $referer_valid = $this->validate_referer($check_referer_path);
                 }
 
-                //135. Added hash-key 'www' for session initiated from Alto side
-                if ($u_ip === $s_ip && ($s_browser === $u_browser || $s_browser === 'www') && $s_forwarded_for === $u_forwarded_for && $referer_valid)
+                if ($u_ip === $s_ip && $s_browser === $u_browser && $s_forwarded_for === $u_forwarded_for && $referer_valid)
                 {
                     $session_expired = false;
 
                     // Check whether the session is still valid if we have one
+                    /* @var $provider_collection \phpbb\auth\provider_collection */
                     $provider_collection = $phpbb_container->get('auth.provider_collection');
                     $provider = $provider_collection->get_provider();
 
@@ -266,7 +266,9 @@ class user extends \phpbb\user {
                         $this->data['is_registered'] = ($this->data['user_id'] != ANONYMOUS && ($this->data['user_type'] == USER_NORMAL || $this->data['user_type'] == USER_FOUNDER)) ? true : false;
                         $this->data['is_bot'] = (!$this->data['is_registered'] && $this->data['user_id'] != ANONYMOUS) ? true : false;
                         $this->data['user_lang'] = basename($this->data['user_lang']);
-                        $this->update_browser_id();
+
+                        // Is user banned? Are they excluded? Won't return on ban, exists within method
+                        $this->check_ban_for_current_session($config);
 
                         return true;
                     }
@@ -278,11 +280,18 @@ class user extends \phpbb\user {
                     {
                         if ($referer_valid)
                         {
-                            add_log('critical', 'LOG_IP_BROWSER_FORWARDED_CHECK', $u_ip, $s_ip, $u_browser, $s_browser, htmlspecialchars($u_forwarded_for), htmlspecialchars($s_forwarded_for));
+                            $phpbb_log->add('critical', $user->data['user_id'], $user->ip, 'LOG_IP_BROWSER_FORWARDED_CHECK', false, array(
+                                $u_ip,
+                                $s_ip,
+                                $u_browser,
+                                $s_browser,
+                                htmlspecialchars($u_forwarded_for),
+                                htmlspecialchars($s_forwarded_for)
+                            ));
                         }
                         else
                         {
-                            add_log('critical', 'LOG_REFERER_INVALID', $this->referer);
+                            $phpbb_log->add('critical', $user->data['user_id'], $user->ip, 'LOG_REFERER_INVALID', false, array($this->referer));
                         }
                     }
                 }
@@ -292,9 +301,10 @@ class user extends \phpbb\user {
         // If we reach here then no (valid) session exists. So we'll create a new one
         return $this->session_create();
     }
+
     function session_create($user_id = false, $set_admin = false, $persist_login = false, $viewonline = true)
     {
-        global $SID, $_SID, $db, $config, $cache, $phpbb_root_path, $phpEx, $phpbb_container, $phpbb_dispatcher;
+        global $SID, $_SID, $db, $config, $cache, $phpbb_container, $phpbb_dispatcher;
 
         $this->data = array();
 
@@ -326,9 +336,6 @@ class user extends \phpbb\user {
             if ($row['bot_agent'] && preg_match('#' . str_replace('\*', '.*?', preg_quote($row['bot_agent'], '#')) . '#i', $this->browser))
             {
                 $bot = $row['user_id'];
-                //135 store session bot_id
-                $_SESSION['forum_user_id'] = (int) $row['user_id'];
-                $_SESSION['is_bot'] = true;
             }
 
             // If ip is supplied, we will make sure the ip is matching too...
@@ -348,10 +355,7 @@ class user extends \phpbb\user {
 
                     if (strpos($this->ip, $bot_ip) === 0)
                     {
-                        //$bot = (int) $row['user_id'];
-                        //135
-                        $bot = $_SESSION['forum_user_id'] = (int) $row['user_id'];
-                        $_SESSION['is_bot'] = true;
+                        $bot = (int) $row['user_id'];
                         break;
                     }
                 }
@@ -363,26 +367,27 @@ class user extends \phpbb\user {
             }
         }
 
+        /* @var $provider_collection \phpbb\auth\provider_collection */
         $provider_collection = $phpbb_container->get('auth.provider_collection');
         $provider = $provider_collection->get_provider();
         $this->data = $provider->autologin();
 
-        if ($user_id !== false && sizeof($this->data) && $this->data['user_id'] != $user_id)
+        if ($user_id !== false && isset($this->data['user_id']) && $this->data['user_id'] != $user_id)
         {
             $this->data = array();
         }
 
-        if (sizeof($this->data))
+        if (isset($this->data['user_id']))
         {
             $this->cookie_data['k'] = '';
             //135
             //$this->cookie_data['u'] = $this->data['user_id'];
-            $this->cookie_data['u'] = $_SESSION['forum_user_id'] = (int) $this->data['user_id'];
+            $this->cookie_data['u'] = $_SESSION['phpbb_user_id'] = (int) $this->data['user_id'];
         }
 
         // If we're presented with an autologin key we'll join against it.
         // Else if we've been passed a user_id we'll grab data based on that
-        if (isset($this->cookie_data['k']) && $this->cookie_data['k'] && $this->cookie_data['u'] && !sizeof($this->data))
+        if (isset($this->cookie_data['k']) && $this->cookie_data['k'] && $this->cookie_data['u'] && empty($this->data))
         {
             $sql = 'SELECT u.*
 				FROM ' . USERS_TABLE . ' u, ' . SESSIONS_KEYS_TABLE . ' k
@@ -402,12 +407,12 @@ class user extends \phpbb\user {
             $db->sql_freeresult($result);
         }
 
-        if ($user_id !== false && !sizeof($this->data))
+        if ($user_id !== false && empty($this->data))
         {
             $this->cookie_data['k'] = '';
             //135
             //$this->cookie_data['u'] = $user_id;
-            $this->cookie_data['u'] = $_SESSION['forum_user_id'] = (int) $user_id;
+            $this->cookie_data['u'] = $_SESSION['phpbb_user_id'] = (int) $user_id;
 
             $sql = 'SELECT *
 				FROM ' . USERS_TABLE . '
@@ -432,7 +437,7 @@ class user extends \phpbb\user {
         // User does not exist
         // User is inactive
         // User is bot
-        if (!sizeof($this->data) || !is_array($this->data))
+        if (!is_array($this->data) || !count($this->data))
         {
             $this->cookie_data['k'] = '';
             $this->cookie_data['u'] = ($bot) ? $bot : ANONYMOUS;
@@ -474,19 +479,7 @@ class user extends \phpbb\user {
         // session exists in which case session_id will also be set
 
         // Is user banned? Are they excluded? Won't return on ban, exists within method
-        if ($this->data['user_type'] != USER_FOUNDER)
-        {
-            if (!$config['forwarded_for_check'])
-            {
-                $this->check_ban($this->data['user_id'], $this->ip);
-            }
-            else
-            {
-                $ips = explode(' ', $this->forwarded_for);
-                $ips[] = $this->ip;
-                $this->check_ban($this->data['user_id'], $ips);
-            }
-        }
+        $this->check_ban_for_current_session($config);
 
         $this->data['is_registered'] = (!$bot && $this->data['user_id'] != ANONYMOUS && ($this->data['user_type'] == USER_NORMAL || $this->data['user_type'] == USER_FOUNDER)) ? true : false;
         $this->data['is_bot'] = ($bot) ? true : false;
@@ -512,8 +505,7 @@ class user extends \phpbb\user {
             $s_forwarded_for = ($config['forwarded_for_check']) ? substr($this->data['session_forwarded_for'], 0, 254) : '';
             $u_forwarded_for = ($config['forwarded_for_check']) ? substr($this->forwarded_for, 0, 254) : '';
 
-            //135
-            if ($u_ip === $s_ip && ($s_browser === $u_browser || $s_browser === 'www') && $s_forwarded_for === $u_forwarded_for)
+            if ($u_ip === $s_ip && $s_browser === $u_browser && $s_forwarded_for === $u_forwarded_for)
             {
                 $this->session_id = $this->data['session_id'];
 
@@ -616,13 +608,6 @@ class user extends \phpbb\user {
 
         $db->sql_return_on_error(false);
 
-        // Save Useragent and last ip
-        $sql = 'UPDATE ' . USERS_TABLE . "
-			SET user_browser = '" . $db->sql_escape($sql_ary['session_browser']) . "',
-				user_last_ip = '" . $db->sql_escape($sql_ary['session_ip']) . "'
-			WHERE user_id = " . (int) $this->data['user_id'];
-        $db->sql_query($sql);
-
         // Regenerate autologin/persistent login key
         if ($session_autologin)
         {
@@ -648,7 +633,7 @@ class user extends \phpbb\user {
             $sql = 'SELECT COUNT(session_id) AS sessions
 					FROM ' . SESSIONS_TABLE . '
 					WHERE session_user_id = ' . (int) $this->data['user_id'] . '
-					AND session_time >= ' . (int) ($this->time_now - (max($config['session_length'], $config['form_token_lifetime'])));
+					AND session_time >= ' . (int) ($this->time_now - (max((int) $config['session_length'], (int) $config['form_token_lifetime'])));
             $result = $db->sql_query($sql);
             $row = $db->sql_fetchrow($result);
             $db->sql_freeresult($result);
@@ -692,9 +677,10 @@ class user extends \phpbb\user {
 
         return true;
     }
+
     function session_kill($new_session = true)
     {
-        global $SID, $_SID, $db, $config, $phpbb_root_path, $phpEx, $phpbb_container, $phpbb_dispatcher;
+        global $SID, $_SID, $db, $phpbb_container, $phpbb_dispatcher;
 
         $sql = 'DELETE FROM ' . SESSIONS_TABLE . "
 			WHERE session_id = '" . $db->sql_escape($this->session_id) . "'
@@ -719,6 +705,7 @@ class user extends \phpbb\user {
         unset($session_id);
 
         // Allow connecting logout with external auth method logout
+        /* @var $provider_collection \phpbb\auth\provider_collection */
         $provider_collection = $phpbb_container->get('auth.provider_collection');
         $provider = $provider_collection->get_provider();
         $provider->logout($this->data, $new_session);
@@ -775,7 +762,6 @@ class user extends \phpbb\user {
         session_start();
         session_regenerate_id(true);
         $this->session_id = session_id();
-
         $SID = '?sid=' . $this->session_id;
         $this->session_id = $_SID = $this->session_id;
 
