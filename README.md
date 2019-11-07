@@ -4,7 +4,11 @@
 
 Copy the extension to phpBB/ext/anp135/altocms
 
-Go to "ACP" > "Customise" > "Extensions" and enable the "AltoCMS" extension.
+1. Go to "ACP" > "Customise" > "Extensions" and enable the "AltoCMS" extension.
+
+2. Configure the same COOKIE host for both systems (Alto and phpBB). 
+
+3. Create triggers for session replication.
 
 ## Tests and Continuous Integration
 

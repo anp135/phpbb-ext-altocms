@@ -1,0 +1,120 @@
+DELIMITER ;;
+CREATE TRIGGER `phpbb_sessions_before_insert` BEFORE INSERT ON `phpbb_sessions` FOR EACH ROW run: BEGIN
+DECLARE alto_user_id integer DEFAULT NULL;
+ DECLARE phpbb_group_id integer DEFAULT NULL;
+ DECLARE alto_key VARCHAR(50) DEFAULT 'alto'; -- ключ, по которому определяется реплицируемая сессия со стороны Alto.
+ DECLARE phpbb_key VARCHAR(50) DEFAULT 'phpbb'; -- ключ, по которому Alto определит реплицируемую сессию со стороны phpBB.
+
+ -- Защита от петли. Если сессия реплицируется со стороны Alto, обратная репликация не нужна!
+ IF NEW.session_user_id = 1 OR NEW.session_forwarded_for = alto_key THEN
+  SET NEW.session_forwarded_for = '';
+  LEAVE run;
+ END IF;
+
+ -- Достаём пользовательские данные для репликации сессии. Связка идёт по username.
+ SELECT alto_users.user_id, phpbb_users.group_id INTO alto_user_id, phpbb_group_id
+	FROM phpbb.phpbb_users phpbb_users
+	LEFT JOIN alto.prefix_user alto_users ON alto_users.user_login = phpbb_users.username
+WHERE phpbb_users.user_id = NEW.session_user_id;
+
+ -- Если со стороны Alto не обнаружилось пользователя, либо пользователь со стороны форума
+ -- состоит в группах, не требующих репликации. Например группы заблокированных пользователей, боты
+ IF alto_user_id IS NULL || phpbb_group_id = 6 || phpbb_group_id = 11 THEN LEAVE run; END IF;
+
+ -- Собственно репликация сессии в БД Alto.
+ INSERT INTO alto.prefix_session (
+     session_key,
+     user_id,
+     session_agent_hash,
+     session_ip_create,
+     session_ip_last,
+     session_date_create,
+     session_date_last
+     )
+  VALUES (
+      NEW.session_id,
+      alto_user_id,
+      phpbb_key,
+      NEW.session_ip,
+      NEW.session_ip,
+      FROM_UNIXTIME(NEW.session_start),
+      FROM_UNIXTIME(NEW.session_time)
+      )
+ ON DUPLICATE KEY UPDATE
+      session_exit = NULL,
+      session_agent_hash = phpbb_key,
+      session_date_last = FROM_UNIXTIME(NEW.session_time);
+
+ -- В Alto механизм последнего посещения пользователя реализован через ключ в таблице _user,
+ -- причём делается это (как и многое другое) стандартным для РНР+MySQL способом: руками... -(
+ UPDATE alto.prefix_user SET
+  user_last_session = NEW.session_id, user_activate_key = phpbb_key
+  WHERE user_id = alto_user_id;
+END ;;
+
+CREATE TRIGGER `phpbb_sessions_before_update` BEFORE UPDATE ON `phpbb_sessions` FOR EACH ROW run: BEGIN
+ DECLARE alto_user_id integer DEFAULT NULL;
+ DECLARE phpbb_group_id integer DEFAULT NULL;
+ DECLARE alto_key VARCHAR(50) DEFAULT 'alto'; -- ключ, по которому определяется реплицируемая сессия со стороны Alto.
+ DECLARE phpbb_key VARCHAR(50) DEFAULT 'phpbb'; -- ключ, по которому Alto определит реплицируемую сессию со стороны phpBB.
+
+ -- Защита от петли. Если сессия реплицируется со стороны Alto, обратная репликация не нужна!
+ IF NEW.session_user_id = 1 OR NEW.session_forwarded_for = alto_key THEN
+  SET NEW.session_forwarded_for = OLD.session_forwarded_for;
+  LEAVE run;
+ ELSEIF NEW.session_forwarded_for = CONCAT(alto_key, '_exit') THEN LEAVE run; END IF;
+
+ -- Достаём пользовательские данные для репликации сессии. Связка идёт по username.
+ -- На всякий случай, чтобы не обновить лишнего...
+ SELECT alto_users.user_id, phpbb_users.group_id INTO alto_user_id, phpbb_group_id
+	FROM phpbb.phpbb_users phpbb_users
+	LEFT JOIN alto.prefix_user alto_users
+		ON alto_users.user_login = phpbb_users.username
+	WHERE phpbb_users.user_id = NEW.session_user_id;
+
+ -- Исключение репликации для определённых пользовательских групп. Например группы заблокированных пользователей, боты
+ IF alto_user_id IS NULL || phpbb_group_id = 6 || phpbb_group_id = 11 THEN LEAVE run; END IF;
+
+ -- Репликация обновляемой сессии. Избыточный, на первый взгляд, ключ user_id - как дополнительная защита, чтобы не
+ -- обновить лишнего...
+ UPDATE alto.prefix_session SET
+     session_ip_last = NEW.session_ip,
+     session_date_last = FROM_UNIXTIME(NEW.session_time),
+     session_agent_hash = 'phpbb'
+  WHERE
+      session_key = NEW.session_id AND
+      user_id = alto_user_id;
+END ;;
+
+CREATE TRIGGER `phpbb_sessions_after_delete` AFTER DELETE ON `phpbb_sessions` FOR EACH ROW run: BEGIN
+ DECLARE alto_user_id integer DEFAULT NULL;
+ DECLARE phpbb_group_id integer DEFAULT NULL;
+ DECLARE alto_key VARCHAR(50) DEFAULT 'alto'; -- ключ, по которому определяется реплицируемая сессия со стороны Alto.
+ DECLARE phpbb_key VARCHAR(50) DEFAULT 'phpbb'; -- ключ, по которому Alto определит реплицируемую сессию со стороны phpBB.
+
+ -- Защита от петли. Если сессия реплицируется со стороны Alto, обратная репликация не нужна!
+ IF OLD.session_user_id = 1 OR OLD.session_forwarded_for LIKE CONCAT(alto_key, '%') THEN
+  LEAVE run;
+ END IF;
+
+ -- Достаём пользовательские данные для репликации сессии. Связка идёт по username.
+ -- На всякий случай, чтобы не обновить лишнего...
+ SELECT alto_users.user_id, phpbb_users.group_id INTO alto_user_id, phpbb_group_id
+ FROM phpbb.phpbb_users phpbb_users
+ LEFT JOIN alto.prefix_user alto_users
+	ON alto_users.user_login = phpbb_users.username
+WHERE phpbb_users.user_id = OLD.session_user_id;
+
+ -- Исключение репликации для определённых пользовательских групп. Например группы заблокированных пользователей, боты
+ IF alto_user_id IS NULL || phpbb_group_id = 6 || phpbb_group_id = 11 THEN LEAVE run; END IF;
+
+ -- Реплицируем закрытие сессии в Alto.
+ UPDATE alto.prefix_session SET
+     session_exit = now(),
+     session_agent_hash = phpbb_key
+  WHERE
+      session_key = OLD.session_id AND
+      user_id = alto_user_id AND
+      session_exit IS NULL;
+END ;;
+DELIMITER ;
